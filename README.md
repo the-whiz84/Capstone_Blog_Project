@@ -17,3 +17,12 @@ It will be prepared for a live web server deployment.
 - set up your CSRF Token for WTForms as environment variable
 - you can register new users to add comments.
 - the first user created in the database will be de Admin.
+
+# Final Note
+Project was hosted on PythonAnywhere by following these guides:
+- https://blog.pythonanywhere.com/121/
+- https://help.pythonanywhere.com/pages/environment-variables-for-web-apps
+- https://help.pythonanywhere.com/pages/UsingSQLAlchemywithMySQL
+
+Site is now deployed on https://TheWhiz.eu.pythonanywhere.com
+

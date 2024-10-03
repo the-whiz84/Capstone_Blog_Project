@@ -12,13 +12,13 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from hashlib import sha256
 from forms import CreatePostForm, RegisterForm, LoginForm, CommentForm, ContactForm
 
-MY_EMAIL = os.environ.get("MY_EMAIL")
-EMAIL_PASSWD = os.environ.get("MY_EMAIL_PASSWD")
+MY_EMAIL = os.getenv("MY_EMAIL")
+EMAIL_PASSWD = os.getenv("MY_EMAIL_PASSWD")
 
 app = Flask(__name__)
-app.config['SECRET_KEY'] = os.environ.get("FLASK_SECRET_KEY")
+app.config['SECRET_KEY'] = os.getenv("SECRET_KEY")
 ckeditor = CKEditor(app)
-Bootstrap5(app)
+bootstrap = Bootstrap5(app)
 
 login_manager = LoginManager()
 login_manager.init_app(app)
@@ -31,7 +31,7 @@ def load_user(user_id):
 class Base(DeclarativeBase):
     pass
 
-app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get("DB_URI", "sqlite:///blog.db")
+app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get("DB_URI")
 db = SQLAlchemy(model_class=Base)
 db.init_app(app)
 
@@ -97,7 +97,7 @@ def admin_only(f):
             return f(*args, **kwargs)
         else:
             return abort(403)
-        
+
     return decorated_function
 
 
@@ -182,8 +182,8 @@ def show_post(post_id):
         )
         db.session.add(new_comment)
         db.session.commit()
-        
-    return render_template("post.html", post=requested_post, current_user=current_user, form=comment_form, gravatar_url=gravatar_url) 
+
+    return render_template("post.html", post=requested_post, current_user=current_user, form=comment_form, gravatar_url=gravatar_url)
 
 
 @app.route("/new-post", methods=["GET", "POST"])
