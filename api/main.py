@@ -1,37 +1,48 @@
-import os, smtplib
-from datetime import date
+import os, smtplib, psycopg2
+from datetime import date, datetime
 from flask import Flask, abort, render_template, redirect, url_for, flash
 from flask_bootstrap import Bootstrap5
 from flask_ckeditor import CKEditor
-from flask_login import UserMixin, login_user, LoginManager, current_user, logout_user, login_required
+from flask_login import (
+    UserMixin,
+    login_user,
+    LoginManager,
+    current_user,
+    logout_user,
+    login_required,
+)
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy.orm import relationship, DeclarativeBase, Mapped, mapped_column
-from sqlalchemy import Integer, String, Text
+from sqlalchemy import Integer, String, Text, DateTime, func
 from functools import wraps
 from werkzeug.security import generate_password_hash, check_password_hash
 from hashlib import sha256
-from forms import CreatePostForm, RegisterForm, LoginForm, CommentForm, ContactForm
+from api.forms import CreatePostForm, RegisterForm, LoginForm, CommentForm, ContactForm
 
 MY_EMAIL = os.getenv("MY_EMAIL")
 EMAIL_PASSWD = os.getenv("MY_EMAIL_PASSWD")
+SQLALCHEMY_DATABASE_URI = os.getenv("DATABASE_URI")
 
 app = Flask(__name__)
-app.config['SECRET_KEY'] = os.getenv("SECRET_KEY")
+app.config["SECRET_KEY"] = os.urandom(24)
 ckeditor = CKEditor(app)
 bootstrap = Bootstrap5(app)
 
 login_manager = LoginManager()
 login_manager.init_app(app)
 
+
 @login_manager.user_loader
 def load_user(user_id):
     return db.get_or_404(User, user_id)
+
 
 # CREATE DATABASE
 class Base(DeclarativeBase):
     pass
 
-app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get("DB_URI")
+
+app.config["SQLALCHEMY_DATABASE_URI"] = f"{SQLALCHEMY_DATABASE_URI}"
 db = SQLAlchemy(model_class=Base)
 db.init_app(app)
 
@@ -47,21 +58,22 @@ class BlogPost(db.Model):
     date: Mapped[str] = mapped_column(String(250), nullable=False)
     body: Mapped[str] = mapped_column(Text, nullable=False)
     img_url: Mapped[str] = mapped_column(String(250), nullable=False)
-    comments: Mapped[list["Comment"]] = relationship(back_populates='parent_post')
+    comments: Mapped[list["Comment"]] = relationship(back_populates="parent_post")
 
 
 class User(db.Model, UserMixin):
-    __tablename__ = 'users'
+    __tablename__ = "users"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    username: Mapped[str] = mapped_column(String(100), unique=True)
     email: Mapped[str] = mapped_column(String(100), unique=True)
     password: Mapped[str] = mapped_column(String(250))
-    name: Mapped[str] = mapped_column(String(100))
-    posts: Mapped[list["BlogPost"]] = relationship(back_populates='author')
-    comments: Mapped[list["Comment"]] = relationship(back_populates='comment_author')
+    posts: Mapped[list["BlogPost"]] = relationship(back_populates="author")
+    comments: Mapped[list["Comment"]] = relationship(back_populates="comment_author")
+    tasks: Mapped[list["Task"]] = relationship(back_populates="user")
 
 
 class Comment(db.Model):
-    __tablename__ = 'comments'
+    __tablename__ = "comments"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     comment_author: Mapped["User"] = relationship(back_populates="comments")
     author_id: Mapped[int] = mapped_column(Integer, db.ForeignKey("users.id"))
@@ -70,13 +82,28 @@ class Comment(db.Model):
     parent_post: Mapped["BlogPost"] = relationship(back_populates="comments")
 
 
+# DB table from ToDo App
+class Task(db.Model):
+    __tablename__ = "tasks"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    task: Mapped[str] = mapped_column(String(250), nullable=False)
+    create_date: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    due_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    status: Mapped[str] = mapped_column(String(50), nullable=False)
+    due_status: Mapped[str] = mapped_column(String(50), nullable=False)
+    user_id: Mapped[int] = mapped_column(Integer, db.ForeignKey("users.id"))
+    user: Mapped["User"] = relationship(back_populates="tasks")
+
+
 with app.app_context():
     db.create_all()
 
 
 # Flask-gravatar is not compatible with Flask 3.x, so had to implement custom function instead
-def gravatar_url(email, size=100, rating='g', default='retro', force_default=False):
-    hash_value = sha256(email.lower().encode('utf-8')).hexdigest()
+def gravatar_url(email, size=100, rating="g", default="retro", force_default=False):
+    hash_value = sha256(email.lower().encode("utf-8")).hexdigest()
     return f"https://www.gravatar.com/avatar/{hash_value}?s={size}&d={default}&r={rating}&f={force_default}"
 
 
@@ -89,7 +116,7 @@ def send_email(name, email, message):
         connection.sendmail(MY_EMAIL, MY_EMAIL, email_message)
 
 
-#Create admin-only decorator
+# Create admin-only decorator
 def admin_only(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
@@ -101,7 +128,7 @@ def admin_only(f):
     return decorated_function
 
 
-@app.route('/register', methods=['GET', 'POST'])
+@app.route("/register", methods=["GET", "POST"])
 def register():
     register_form = RegisterForm()
     if register_form.validate_on_submit():
@@ -110,55 +137,54 @@ def register():
         # Note, email in db is unique so will only have one result.
         user = result.scalar()
         if user:
-        # User already exists
+            # User already exists
             flash("You've already signed up with that email, log in instead!")
-            return redirect(url_for('login'))
+            return redirect(url_for("login"))
         else:
             hashed_password = generate_password_hash(
-                password=register_form.password.data,
-                method="scrypt",
-                salt_length=16
+                password=register_form.password.data, method="scrypt", salt_length=16
             )
             new_user = User(
                 email=register_form.email.data,
-                name=register_form.name.data,
-                password=hashed_password
+                username=register_form.username.data,
+                password=hashed_password,
             )
             db.session.add(new_user)
             db.session.commit()
             login_user(new_user)
-            return redirect(url_for('get_all_posts'))
+            return redirect(url_for("get_all_posts"))
 
     return render_template("register.html", form=register_form)
 
 
-@app.route('/login', methods=["GET", "POST"])
+@app.route("/login", methods=["GET", "POST"])
 def login():
     login_form = LoginForm()
     if login_form.validate_on_submit():
-        password=login_form.password.data
+        password = login_form.password.data
         # Find user by email entered.
-        result = db.session.execute(db.select(User).where(User.email == login_form.email.data))
+        result = db.session.execute(
+            db.select(User).where(User.email == login_form.email.data)
+        )
         user = result.scalar()
         if user and check_password_hash(user.password, password):
             login_user(user)
-            return redirect(url_for('get_all_posts'))
+            return redirect(url_for("get_all_posts"))
         else:
             flash("Invalid credentials, please try again.")
-            return redirect(url_for('login'))
+            return redirect(url_for("login"))
 
     return render_template("login.html", form=login_form)
 
 
-
-@app.route('/logout')
+@app.route("/logout")
 @login_required
 def logout():
     logout_user()
-    return redirect(url_for('get_all_posts'))
+    return redirect(url_for("get_all_posts"))
 
 
-@app.route('/')
+@app.route("/")
 def get_all_posts():
     result = db.session.execute(db.select(BlogPost))
     posts = result.scalars().all()
@@ -178,12 +204,18 @@ def show_post(post_id):
         new_comment = Comment(
             text=comment_form.comment_text.data,
             comment_author=current_user,
-            parent_post=requested_post
+            parent_post=requested_post,
         )
         db.session.add(new_comment)
         db.session.commit()
 
-    return render_template("post.html", post=requested_post, current_user=current_user, form=comment_form, gravatar_url=gravatar_url)
+    return render_template(
+        "post.html",
+        post=requested_post,
+        current_user=current_user,
+        form=comment_form,
+        gravatar_url=gravatar_url,
+    )
 
 
 @app.route("/new-post", methods=["GET", "POST"])
@@ -197,7 +229,7 @@ def add_new_post():
             body=form.body.data,
             img_url=form.img_url.data,
             author=current_user,
-            date=date.today().strftime("%B %d, %Y")
+            date=date.today().strftime("%B %d, %Y"),
         )
         db.session.add(new_post)
         db.session.commit()
@@ -214,7 +246,7 @@ def edit_post(post_id):
         subtitle=post.subtitle,
         img_url=post.img_url,
         author=post.author,
-        body=post.body
+        body=post.body,
     )
     if edit_form.validate_on_submit():
         post.title = edit_form.title.data
@@ -224,7 +256,12 @@ def edit_post(post_id):
         post.body = edit_form.body.data
         db.session.commit()
         return redirect(url_for("show_post", post_id=post.id))
-    return render_template("make-post.html", form=edit_form, is_edit=True, current_user=current_user)
+    return render_template(
+        "make-post.html",
+        form=edit_form,
+        is_edit=True,
+        current_user=current_user,
+    )
 
 
 @app.route("/delete/<int:post_id>")
@@ -233,7 +270,7 @@ def delete_post(post_id):
     post_to_delete = db.get_or_404(BlogPost, post_id)
     db.session.delete(post_to_delete)
     db.session.commit()
-    return redirect(url_for('get_all_posts'))
+    return redirect(url_for("get_all_posts"))
 
 
 @app.route("/about")
@@ -241,11 +278,15 @@ def about():
     return render_template("about.html")
 
 
-@app.route("/contact", methods=['GET', 'POST'])
+@app.route("/contact", methods=["GET", "POST"])
 def contact():
     contact_form = ContactForm()
     if contact_form.validate_on_submit():
-        send_email(name=contact_form.name.data, email=contact_form.email.data, message=contact_form.message.data)
+        send_email(
+            name=contact_form.name.data,
+            email=contact_form.email.data,
+            message=contact_form.message.data,
+        )
         return render_template("contact.html", msg_sent=True, form=contact_form)
     return render_template("contact.html", msg_sent=False, form=contact_form)
 
